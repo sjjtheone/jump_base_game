@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>Neon Jumper 3D - Synthwave Vertical Platformer</title>
     
     <!-- Google Fonts -->
@@ -34,6 +34,8 @@
             user-select: none;
             color: #fff;
             -webkit-user-select: none;
+            overscroll-behavior: none;
+            -webkit-tap-highlight-color: transparent;
         }
 
         #game-container {
@@ -43,6 +45,11 @@
             top: 0;
             left: 0;
             z-index: 1;
+            touch-action: none; /* the canvas is the touch-steer surface: no scroll/zoom gestures */
+        }
+
+        button {
+            touch-action: manipulation; /* kill the 300ms tap delay / double-tap zoom */
         }
 
         /* HUD Styling */
@@ -532,6 +539,96 @@
             text-align: center;
             padding: 8px 0;
         }
+
+        /* Control Mode Selector (Touch / Gyro) */
+        .control-mode-select {
+            width: 100%;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .control-mode-title {
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+            color: rgba(255, 255, 255, 0.6);
+            text-align: left;
+        }
+
+        .mode-toggle {
+            display: flex;
+            gap: 4px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 12px;
+            padding: 4px;
+        }
+
+        .mode-btn {
+            flex: 1;
+            padding: 10px 8px;
+            border-radius: 9px;
+            border: 1px solid transparent;
+            background: transparent;
+            color: rgba(255, 255, 255, 0.55);
+            font-family: 'Outfit', sans-serif;
+            font-size: 12px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            cursor: pointer;
+            transition: all 0.25s ease;
+        }
+
+        .mode-btn.active {
+            background: rgba(0, 240, 255, 0.12);
+            border-color: rgba(0, 240, 255, 0.4);
+            color: var(--neon-cyan);
+            box-shadow: 0 0 12px rgba(0, 240, 255, 0.25);
+            text-shadow: 0 0 8px rgba(0, 240, 255, 0.5);
+        }
+
+        .mode-hint {
+            font-size: 11px;
+            color: rgba(255, 255, 255, 0.4);
+            text-align: left;
+            min-height: 14px;
+        }
+
+        /* Compact layout for phones */
+        @media (max-width: 600px), (max-height: 700px) {
+            h1 { font-size: 30px; }
+
+            .menu-card {
+                padding: 28px 22px;
+                gap: 16px;
+                max-width: 360px;
+                max-height: 92vh;
+                overflow-y: auto;
+            }
+
+            p.tagline { font-size: 12px; }
+
+            #hud { padding: 12px; }
+
+            .hud-panel { padding: 10px 16px; border-radius: 12px; }
+
+            #score-panel { min-width: 110px; }
+            #score-value { font-size: 24px; }
+
+            #spring-slot { width: 40px; height: 40px; }
+
+            #powerups-container { width: 220px; bottom: 16px; }
+
+            .btn-play { padding: 14px 28px; font-size: 14px; }
+
+            .stat-box { padding: 10px 16px; }
+            .stat-value { font-size: 17px; }
+
+            #leaderboard-list { max-height: 120px; }
+        }
     </style>
 </head>
 <body>
@@ -606,7 +703,16 @@
                     <span style="font-size: 11px; color: rgba(255,255,255,0.5);">Pass thru edges</span>
                 </div>
             </div>
-            
+
+            <div class="control-mode-select">
+                <span class="control-mode-title">Mobile Controls</span>
+                <div class="mode-toggle">
+                    <button class="mode-btn" data-mode="touch">Touch</button>
+                    <button class="mode-btn" data-mode="gyro">Gyro</button>
+                </div>
+                <span class="mode-hint"></span>
+            </div>
+
             <button id="btn-start" class="btn-play">Start System</button>
         </div>
     </div>
@@ -636,6 +742,15 @@
             <div class="leaderboard">
                 <div class="leaderboard-title">Top Runs</div>
                 <ol id="leaderboard-list"></ol>
+            </div>
+
+            <div class="control-mode-select">
+                <span class="control-mode-title">Mobile Controls</span>
+                <div class="mode-toggle">
+                    <button class="mode-btn" data-mode="touch">Touch</button>
+                    <button class="mode-btn" data-mode="gyro">Gyro</button>
+                </div>
+                <span class="mode-hint"></span>
             </div>
 
             <button id="btn-restart" class="btn-play" style="background: linear-gradient(135deg, var(--neon-magenta), #ff5500); box-shadow: 0 0 25px rgba(255, 0, 119, 0.4);">Reboot Run</button>
@@ -1219,6 +1334,7 @@
                 highScore: parseInt(localStorage.getItem('neon_jumper_high_score') || '0'),
                 active: false,
                 gameOver: false,
+                controlMode: localStorage.getItem('neon_jumper_control_mode') || 'touch',
                 springCount: 0, // inventory count, capped at MAX_SPRINGS
                 boostTimer: 0, // ms remaining
                 flightTimer: 0, // ms remaining
@@ -1232,6 +1348,18 @@
                 right: false
             },
 
+            // Touch steering: screen is split 50/50, hold a half to steer that way
+            touch: {
+                left: false,
+                right: false
+            },
+
+            // Gyro steering: gamma = signed left/right tilt, normalized in updatePhysics
+            gyro: {
+                listening: false, // deviceorientation listener attached (permission granted)
+                gamma: 0
+            },
+
             init() {
                 // Cache the stickman textures immediately
                 this.textures.standing = generateStickmanTexture('standing');
@@ -1242,7 +1370,9 @@
 
                 this.setupThree();
                 this.setupInput();
+                this.setupTouchControls();
                 this.setupUIEvents();
+                this.updateControlModeUI();
                 this.updateHUD();
 
                 // Retry uploading any scores that never reached the remote API
@@ -1391,6 +1521,98 @@
                 window.addEventListener('keyup', onKeyUp);
             },
 
+            // ==========================================
+            // MOBILE CONTROLS (TOUCH SPLIT-SCREEN + GYRO)
+            // ==========================================
+            setupTouchControls() {
+                const container = document.getElementById('game-container');
+
+                // Recompute both flags from ALL active touches every event, so
+                // multi-touch and fingers sliding across the middle line both work.
+                const applyTouches = (e) => {
+                    // Menu overlays sit above the container, so these events only
+                    // arrive during gameplay — but guard anyway.
+                    if (!this.state.active || this.state.controlMode !== 'touch') {
+                        this.touch.left = false;
+                        this.touch.right = false;
+                        return;
+                    }
+                    e.preventDefault(); // no scroll/zoom/double-tap while steering
+
+                    const mid = window.innerWidth / 2;
+                    let left = false, right = false;
+                    for (const t of e.touches) {
+                        if (t.clientX < mid) left = true;
+                        else right = true;
+                    }
+                    this.touch.left = left;
+                    this.touch.right = right;
+                };
+
+                container.addEventListener('touchstart', applyTouches, { passive: false });
+                container.addEventListener('touchmove', applyTouches, { passive: false });
+                container.addEventListener('touchend', applyTouches, { passive: false });
+                container.addEventListener('touchcancel', applyTouches, { passive: false });
+            },
+
+            handleOrientation(e) {
+                // Remap tilt axis by screen orientation so "tilt right = move right"
+                // holds in landscape too. gamma = left/right in portrait, beta in landscape.
+                const angle = (screen.orientation && screen.orientation.angle) ?? window.orientation ?? 0;
+                let tilt;
+                if (angle === 90) tilt = e.beta;
+                else if (angle === -90 || angle === 270) tilt = -e.beta;
+                else if (angle === 180) tilt = -e.gamma;
+                else tilt = e.gamma;
+                this.gyro.gamma = tilt || 0;
+            },
+
+            // Attach the deviceorientation listener, requesting permission where
+            // required (iOS 13+). MUST be called from within a user gesture.
+            async enableGyro() {
+                if (this.gyro.listening) return true;
+                if (typeof DeviceOrientationEvent === 'undefined') return false;
+                try {
+                    if (typeof DeviceOrientationEvent.requestPermission === 'function') {
+                        const res = await DeviceOrientationEvent.requestPermission();
+                        if (res !== 'granted') return false;
+                    }
+                    window.addEventListener('deviceorientation', (e) => this.handleOrientation(e));
+                    this.gyro.listening = true;
+                    return true;
+                } catch (err) {
+                    return false;
+                }
+            },
+
+            async setControlMode(mode) {
+                if (mode === 'gyro') {
+                    const ok = await this.enableGyro();
+                    if (!ok) {
+                        this.state.controlMode = 'touch';
+                        localStorage.setItem('neon_jumper_control_mode', 'touch');
+                        this.updateControlModeUI('Gyro unavailable or denied — using touch');
+                        return;
+                    }
+                }
+                this.state.controlMode = mode;
+                localStorage.setItem('neon_jumper_control_mode', mode);
+                this.updateControlModeUI();
+            },
+
+            updateControlModeUI(overrideHint) {
+                const mode = this.state.controlMode;
+                document.querySelectorAll('.mode-btn').forEach(btn => {
+                    btn.classList.toggle('active', btn.dataset.mode === mode);
+                });
+                const hint = overrideHint || (mode === 'gyro'
+                    ? 'Tilt your device left / right to steer'
+                    : 'Hold the left / right half of the screen to steer');
+                document.querySelectorAll('.mode-hint').forEach(el => {
+                    el.textContent = hint;
+                });
+            },
+
             setupUIEvents() {
                 this.elements.btnStart.addEventListener('click', () => this.startGame());
                 this.elements.btnRestart.addEventListener('click', () => this.startGame());
@@ -1408,10 +1630,21 @@
 
                 // Keep A/D key handling from firing while typing a name
                 this.elements.nameInput.addEventListener('keydown', (e) => e.stopPropagation());
+
+                // Touch / Gyro selector (one pair per menu, kept in sync)
+                document.querySelectorAll('.mode-btn').forEach(btn => {
+                    btn.addEventListener('click', () => this.setControlMode(btn.dataset.mode));
+                });
             },
 
             startGame() {
                 sfx.init(); // Initialize audio context on user action
+
+                // Saved mode was 'gyro' but the listener isn't attached yet (permission
+                // needs a user gesture — this click qualifies). Falls back to touch on denial.
+                if (this.state.controlMode === 'gyro' && !this.gyro.listening) {
+                    this.setControlMode('gyro');
+                }
 
                 // Finalize the previous run's entry: push it (and any older unsynced
                 // entries) to the remote API if one is configured. Fire-and-forget —
@@ -1438,6 +1671,8 @@
                 this.state.flightTimer = 0;
                 this.state.highestPlatformY = 0;
                 this.state.runStartTime = performance.now();
+                this.touch.left = false;
+                this.touch.right = false;
 
                 // Reset inventory slot
                 this.elements.springSlot.classList.remove('has-spring');
@@ -1765,15 +2000,27 @@
                 }
 
                 // A. Horizontal Movement & Smooth Inertia
-                if (this.keys.left) {
-                    this.player.velocity.x -= this.ACCEL * dt;
+                // Unified input axis in [-1, 1]: keyboard is digital (±1), touch halves
+                // are digital (±1), gyro tilt is analog for finer steering.
+                let accelInput = 0;
+                if (this.keys.left) accelInput -= 1;
+                if (this.keys.right) accelInput += 1;
+
+                if (this.state.controlMode === 'touch') {
+                    if (this.touch.left) accelInput -= 1;
+                    if (this.touch.right) accelInput += 1;
+                } else if (this.state.controlMode === 'gyro' && this.gyro.listening) {
+                    // Full speed at 25° of tilt, with a small dead zone so a device
+                    // resting in the hand doesn't drift.
+                    const tilt = Math.max(-1, Math.min(1, this.gyro.gamma / 25));
+                    if (Math.abs(tilt) > 0.08) accelInput += tilt;
                 }
-                if (this.keys.right) {
-                    this.player.velocity.x += this.ACCEL * dt;
-                }
-                
-                // Apply drag friction
-                if (!this.keys.left && !this.keys.right) {
+
+                accelInput = Math.max(-1, Math.min(1, accelInput));
+                this.player.velocity.x += this.ACCEL * accelInput * dt;
+
+                // Apply drag friction when no input is held
+                if (accelInput === 0) {
                     this.player.velocity.x *= Math.pow(this.FRICTION, dt);
                     // Snap to zero when speed gets very small
                     if (Math.abs(this.player.velocity.x) < 0.1) {
